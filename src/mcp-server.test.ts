@@ -10,7 +10,7 @@ describe("toJsonText", () => {
 });
 
 describe("registerTaskPaperTools", () => {
-  it("registers the first-version TaskPaper tools", () => {
+  it("registers the TaskPaper tools", () => {
     const names: string[] = [];
     const server = {
       registerTool(name: string) {
@@ -21,18 +21,24 @@ describe("registerTaskPaperTools", () => {
     registerTaskPaperTools(server, {
       status: async () => ({}),
       readFrontDocument: async () => ({}),
+      readFile: async () => ({}),
       searchItems: async () => ({}),
       addTask: async () => ({}),
       completeTask: async () => ({}),
+      listProjects: async () => ({}),
+      archiveDone: async () => ({}),
       setFilter: async () => ({})
     });
 
     expect(names).toEqual([
       "taskpaper_status",
       "taskpaper_read_front_document",
+      "taskpaper_read_file",
       "taskpaper_search_items",
       "taskpaper_add_task",
       "taskpaper_complete_task",
+      "taskpaper_list_projects",
+      "taskpaper_archive_done",
       "taskpaper_set_filter"
     ]);
   });

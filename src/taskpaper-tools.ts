@@ -14,12 +14,122 @@ export interface TaskPaperToolsOptions {
   };
 }
 
+export interface TaskPaperItem {
+  line: number;
+  depth: number;
+  indent: string;
+  type: "project" | "task" | "note";
+  text: string;
+  content: string;
+  tags: Record<string, string>;
+}
+
+export interface TaskPaperProject {
+  line: number;
+  name: string;
+  depth: number;
+}
+
 export function normalizeTaskLine(text: string): string {
   const trimmed = text.trim();
   if (/^[-+*]\s/.test(trimmed)) {
     return trimmed;
   }
   return `- ${trimmed}`;
+}
+
+function depthFromIndent(indent: string): number {
+  const tabs = (indent.match(/\t/g) ?? []).length;
+  const spaces = (indent.match(/ /g) ?? []).length;
+  return tabs + Math.floor(spaces / 2);
+}
+
+function parseTags(text: string): Record<string, string> {
+  const tags: Record<string, string> = {};
+  const tagPattern = /@([A-Za-z0-9_-]+)(?:\(([^)]*)\))?/g;
+  for (const match of text.matchAll(tagPattern)) {
+    tags[match[1] ?? ""] = match[2] ?? "";
+  }
+  delete tags[""];
+  return tags;
+}
+
+function stripTags(text: string): string {
+  return text.replace(/\s*@([A-Za-z0-9_-]+)(?:\([^)]*\))?/g, "").trim();
+}
+
+export function parseTaskPaperText(taskpaperText: string): TaskPaperItem[] {
+  return taskpaperText
+    .split("\n")
+    .flatMap((rawLine, index): TaskPaperItem[] => {
+      if (!rawLine.trim()) {
+        return [];
+      }
+
+      const indent = rawLine.match(/^\s*/)?.[0] ?? "";
+      const text = rawLine.slice(indent.length);
+      const depth = depthFromIndent(indent);
+      const tags = parseTags(text);
+
+      if (text.endsWith(":")) {
+        return [
+          {
+            line: index + 1,
+            depth,
+            indent,
+            type: "project",
+            text,
+            content: stripTags(text.slice(0, -1)),
+            tags
+          }
+        ];
+      }
+
+      if (/^[-+*]\s/.test(text)) {
+        const body = text.replace(/^[-+*]\s+/, "");
+        return [
+          {
+            line: index + 1,
+            depth,
+            indent,
+            type: "task",
+            text,
+            content: stripTags(body),
+            tags
+          }
+        ];
+      }
+
+      return [
+        {
+          line: index + 1,
+          depth,
+          indent,
+          type: "note",
+          text,
+          content: stripTags(text),
+          tags
+        }
+      ];
+    });
+}
+
+export function searchTaskPaperText(taskpaperText: string, query: string): TaskPaperItem[] {
+  const trimmed = query.trim();
+  const items = parseTaskPaperText(taskpaperText);
+
+  if (trimmed === "not @done") {
+    return items.filter((item) => !("done" in item.tags));
+  }
+
+  const tagMatch = trimmed.match(/^@([A-Za-z0-9_-]+)$/);
+  if (tagMatch) {
+    const tagName = tagMatch[1] ?? "";
+    return items.filter((item) => tagName in item.tags);
+  }
+
+  const lowered = trimmed.toLowerCase();
+  return items.filter((item) => item.text.toLowerCase().includes(lowered) || item.content.toLowerCase().includes(lowered));
 }
 
 export function addTaskToTaskPaperText(
@@ -64,6 +174,81 @@ export function addTaskToTaskPaperText(
 
   lines.splice(insertIndex, 0, `${childIndent}${task}`);
   return `${lines.join("\n")}\n`;
+}
+
+export function completeTaskInTaskPaperText(
+  taskpaperText: string,
+  input: { query: string; date: string }
+): { completed: number; line?: number; text: string } {
+  const item = searchTaskPaperText(taskpaperText, input.query).find((candidate) => candidate.type === "task");
+  if (!item) {
+    return { completed: 0, text: taskpaperText };
+  }
+
+  const lines = taskpaperText.split("\n");
+  const index = item.line - 1;
+  const line = lines[index] ?? "";
+  if (/@done(?:\([^)]*\))?/.test(line)) {
+    lines[index] = line.replace(/@done(?:\([^)]*\))?/, `@done(${input.date})`);
+  } else {
+    lines[index] = `${line} @done(${input.date})`;
+  }
+  return { completed: 1, line: item.line, text: lines.join("\n") };
+}
+
+export function listProjectsInTaskPaperText(taskpaperText: string): TaskPaperProject[] {
+  return parseTaskPaperText(taskpaperText)
+    .filter((item) => item.type === "project")
+    .map((item) => ({ line: item.line, name: item.content, depth: item.depth }));
+}
+
+function projectNameForLine(items: TaskPaperItem[], line: number): string | undefined {
+  let current: TaskPaperItem | undefined;
+  for (const item of items) {
+    if (item.line >= line) {
+      break;
+    }
+    if (item.type === "project") {
+      current = item;
+    }
+  }
+  return current?.content;
+}
+
+export function archiveDoneInTaskPaperText(
+  taskpaperText: string,
+  archiveProject: string
+): { archived: number; text: string } {
+  const items = parseTaskPaperText(taskpaperText);
+  const doneTasks = items.filter(
+    (item) => item.type === "task" && "done" in item.tags && projectNameForLine(items, item.line) !== archiveProject
+  );
+
+  if (doneTasks.length === 0) {
+    return { archived: 0, text: taskpaperText };
+  }
+
+  const lines = taskpaperText.endsWith("\n") ? taskpaperText.split("\n").slice(0, -1) : taskpaperText.split("\n");
+  const removeLines = new Set(doneTasks.map((item) => item.line));
+  const movedLines = doneTasks.map((item) => `\t${item.text}`);
+  const remaining = lines.filter((_line, index) => !removeLines.has(index + 1));
+  const archiveIndex = remaining.findIndex((line) => line.trim() === `${archiveProject}:`);
+
+  if (archiveIndex === -1) {
+    remaining.push(`${archiveProject}:`, ...movedLines);
+  } else {
+    let insertIndex = remaining.length;
+    for (let index = archiveIndex + 1; index < remaining.length; index += 1) {
+      const line = remaining[index] ?? "";
+      if (line.trim() && !line.startsWith("\t")) {
+        insertIndex = index;
+        break;
+      }
+    }
+    remaining.splice(insertIndex, 0, ...movedLines);
+  }
+
+  return { archived: doneTasks.length, text: `${remaining.join("\n")}\n` };
 }
 
 const searchItemsScript = String(function TaskPaperContextScript(
@@ -188,7 +373,21 @@ export function createTaskPaperTools(bridge: TaskPaperBridge, options: TaskPaper
       const text = await bridge.evaluate(readFrontDocumentScript);
       return { text };
     },
-    async searchItems(input: { query: string }) {
+    async readFile(input: { file: string }) {
+      return {
+        file: input.file,
+        text: await fileSystem.readFile(input.file, "utf8")
+      };
+    },
+    async searchItems(input: { file?: string; query: string }) {
+      if (input.file) {
+        return {
+          file: input.file,
+          items: searchTaskPaperText(await fileSystem.readFile(input.file, "utf8"), input.query).filter(
+            (item) => item.type === "task"
+          )
+        };
+      }
       const items = await bridge.evaluate(searchItemsScript, { query: input.query });
       return { items };
     },
@@ -225,11 +424,38 @@ export function createTaskPaperTools(bridge: TaskPaperBridge, options: TaskPaper
         createProject: input.createProject ?? true
       });
     },
-    async completeTask(input: { query: string; date?: string }) {
+    async completeTask(input: { file?: string; query: string; date?: string }) {
+      const date = input.date ?? new Date().toISOString().slice(0, 10);
+      if (input.file) {
+        const result = completeTaskInTaskPaperText(await fileSystem.readFile(input.file, "utf8"), {
+          query: input.query,
+          date
+        });
+        if (result.completed) {
+          await fileSystem.writeFile(input.file, result.text, "utf8");
+        }
+        return { completed: result.completed, file: input.file, line: result.line };
+      }
       return bridge.evaluate(completeTaskScript, {
         query: input.query,
-        date: input.date ?? new Date().toISOString().slice(0, 10)
+        date
       });
+    },
+    async listProjects(input: { file: string }) {
+      return {
+        file: input.file,
+        projects: listProjectsInTaskPaperText(await fileSystem.readFile(input.file, "utf8"))
+      };
+    },
+    async archiveDone(input: { file: string; archiveProject?: string }) {
+      const result = archiveDoneInTaskPaperText(
+        await fileSystem.readFile(input.file, "utf8"),
+        input.archiveProject ?? "Archive"
+      );
+      if (result.archived) {
+        await fileSystem.writeFile(input.file, result.text, "utf8");
+      }
+      return { archived: result.archived, file: input.file };
     },
     async setFilter(input: { query: string }) {
       return bridge.evaluate(setFilterScript, { query: input.query });

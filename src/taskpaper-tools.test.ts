@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { addTaskToTaskPaperText, createTaskPaperTools, normalizeTaskLine } from "./taskpaper-tools.js";
+import {
+  addTaskToTaskPaperText,
+  archiveDoneInTaskPaperText,
+  completeTaskInTaskPaperText,
+  createTaskPaperTools,
+  listProjectsInTaskPaperText,
+  normalizeTaskLine,
+  parseTaskPaperText,
+  searchTaskPaperText
+} from "./taskpaper-tools.js";
 
 describe("normalizeTaskLine", () => {
   it("adds TaskPaper task syntax when a plain task is provided", () => {
@@ -66,6 +75,31 @@ describe("createTaskPaperTools", () => {
 
     expect(calls[0]?.options).toEqual({ query: "not @done" });
     expect(result.items).toEqual([{ id: "abc", text: "- Buy milk", type: "task" }]);
+  });
+
+  it("searches an explicit file without using TaskPaper", async () => {
+    const tools = createTaskPaperTools(
+      {
+        evaluate: async () => {
+          throw new Error("evaluate should not be used for explicit file search");
+        },
+        runJxa: async () => {
+          throw new Error("runJxa should not be used for explicit file search");
+        }
+      },
+      {
+        fileSystem: {
+          readFile: async () => "Inbox:\n\t- Buy milk @due(today)\n\t- Call bank @done(2026-07-06)\n",
+          writeFile: async () => {}
+        }
+      }
+    );
+
+    const result = await tools.searchItems({ file: "/tmp/tasks.taskpaper", query: "not @done" });
+
+    expect(result.items).toEqual([
+      expect.objectContaining({ line: 2, text: "- Buy milk @due(today)", content: "Buy milk", type: "task" })
+    ]);
   });
 
   it("adds a normalized task line to the selected project", async () => {
@@ -158,6 +192,106 @@ describe("createTaskPaperTools", () => {
     expect(options).toEqual({ query: "Buy milk", date: "2026-07-06" });
   });
 
+  it("marks the first matching explicit-file task done on disk", async () => {
+    const writes: Array<{ path: string; text: string }> = [];
+    const tools = createTaskPaperTools(
+      {
+        evaluate: async () => {
+          throw new Error("evaluate should not be used for explicit file complete");
+        },
+        runJxa: async () => {
+          throw new Error("runJxa should not be used for explicit file complete");
+        }
+      },
+      {
+        fileSystem: {
+          readFile: async () => "Inbox:\n\t- Buy milk\n",
+          writeFile: async (path, text) => writes.push({ path, text })
+        }
+      }
+    );
+
+    await expect(
+      tools.completeTask({ file: "/tmp/tasks.taskpaper", query: "Buy milk", date: "2026-07-07" })
+    ).resolves.toEqual({
+      completed: 1,
+      file: "/tmp/tasks.taskpaper",
+      line: 2
+    });
+    expect(writes).toEqual([{ path: "/tmp/tasks.taskpaper", text: "Inbox:\n\t- Buy milk @done(2026-07-07)\n" }]);
+  });
+
+  it("reads an explicit file", async () => {
+    const tools = createTaskPaperTools(
+      {
+        evaluate: async () => {
+          throw new Error("evaluate should not be used for explicit file read");
+        },
+        runJxa: async () => {
+          throw new Error("runJxa should not be used for explicit file read");
+        }
+      },
+      {
+        fileSystem: {
+          readFile: async () => "Inbox:\n\t- Buy milk\n",
+          writeFile: async () => {}
+        }
+      }
+    );
+
+    await expect(tools.readFile({ file: "/tmp/tasks.taskpaper" })).resolves.toEqual({
+      file: "/tmp/tasks.taskpaper",
+      text: "Inbox:\n\t- Buy milk\n"
+    });
+  });
+
+  it("lists projects in an explicit file", async () => {
+    const tools = createTaskPaperTools(
+      {
+        evaluate: async () => ({}),
+        runJxa: async () => ({})
+      },
+      {
+        fileSystem: {
+          readFile: async () => "Inbox:\n\t- Buy milk\nWork:\n\t- Ship\n",
+          writeFile: async () => {}
+        }
+      }
+    );
+
+    await expect(tools.listProjects({ file: "/tmp/tasks.taskpaper" })).resolves.toEqual({
+      file: "/tmp/tasks.taskpaper",
+      projects: [
+        { line: 1, name: "Inbox", depth: 0 },
+        { line: 3, name: "Work", depth: 0 }
+      ]
+    });
+  });
+
+  it("archives done tasks from an explicit file", async () => {
+    const writes: Array<{ path: string; text: string }> = [];
+    const tools = createTaskPaperTools(
+      {
+        evaluate: async () => ({}),
+        runJxa: async () => ({})
+      },
+      {
+        fileSystem: {
+          readFile: async () => "Inbox:\n\t- Open\n\t- Closed @done(2026-07-06)\nArchive:\n\t- Older @done(2026-07-01)\n",
+          writeFile: async (path, text) => writes.push({ path, text })
+        }
+      }
+    );
+
+    await expect(tools.archiveDone({ file: "/tmp/tasks.taskpaper", archiveProject: "Archive" })).resolves.toEqual({
+      archived: 1,
+      file: "/tmp/tasks.taskpaper"
+    });
+    expect(writes[0]?.text).toBe(
+      "Inbox:\n\t- Open\nArchive:\n\t- Older @done(2026-07-01)\n\t- Closed @done(2026-07-06)\n"
+    );
+  });
+
   it("sets the front document filter", async () => {
     let options: unknown;
     const tools = createTaskPaperTools({
@@ -189,5 +323,59 @@ describe("addTaskToTaskPaperText", () => {
         createProject: true
       })
     ).toBe("Welcome:\n\t- Read\nInbox:\n\t- Buy milk\n");
+  });
+});
+
+describe("parseTaskPaperText", () => {
+  it("parses projects, tasks, notes, tags, depth, and line numbers", () => {
+    expect(parseTaskPaperText("Inbox:\n\t- Buy milk @due(today)\n\tA note\n")).toEqual([
+      { line: 1, depth: 0, indent: "", type: "project", text: "Inbox:", content: "Inbox", tags: {} },
+      {
+        line: 2,
+        depth: 1,
+        indent: "\t",
+        type: "task",
+        text: "- Buy milk @due(today)",
+        content: "Buy milk",
+        tags: { due: "today" }
+      },
+      { line: 3, depth: 1, indent: "\t", type: "note", text: "A note", content: "A note", tags: {} }
+    ]);
+  });
+});
+
+describe("searchTaskPaperText", () => {
+  it("supports not @done and tag searches", () => {
+    const text = "Inbox:\n\t- Buy milk @due(today)\n\t- Closed @done(2026-07-06)\n";
+    expect(searchTaskPaperText(text, "not @done").map((item) => item.content)).toEqual(["Inbox", "Buy milk"]);
+    expect(searchTaskPaperText(text, "@due").map((item) => item.content)).toEqual(["Buy milk"]);
+  });
+});
+
+describe("completeTaskInTaskPaperText", () => {
+  it("adds a done tag to the first matching task", () => {
+    expect(completeTaskInTaskPaperText("Inbox:\n\t- Buy milk\n", { query: "Buy milk", date: "2026-07-07" })).toEqual({
+      completed: 1,
+      line: 2,
+      text: "Inbox:\n\t- Buy milk @done(2026-07-07)\n"
+    });
+  });
+});
+
+describe("listProjectsInTaskPaperText", () => {
+  it("returns project lines", () => {
+    expect(listProjectsInTaskPaperText("Inbox:\n\t- Buy milk\nWork:\n")).toEqual([
+      { line: 1, name: "Inbox", depth: 0 },
+      { line: 3, name: "Work", depth: 0 }
+    ]);
+  });
+});
+
+describe("archiveDoneInTaskPaperText", () => {
+  it("moves done tasks into an archive project", () => {
+    expect(archiveDoneInTaskPaperText("Inbox:\n\t- Open\n\t- Closed @done(2026-07-06)\n", "Archive")).toEqual({
+      archived: 1,
+      text: "Inbox:\n\t- Open\nArchive:\n\t- Closed @done(2026-07-06)\n"
+    });
   });
 });
