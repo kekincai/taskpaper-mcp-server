@@ -59,9 +59,15 @@ Example direct file write:
 {
   "file": "/Users/you/tasks.taskpaper",
   "project": "Inbox",
-  "text": "Buy milk @due(today)"
+  "text": "Buy milk",
+  "due": "today",
+  "tags": {
+    "home": true
+  }
 }
 ```
+
+Humans can ask in natural language, for example "add buy milk to Inbox for today". The model should pass `text`, `project`, and friendly metadata such as `due`, `start`, or `tags`; the server writes valid TaskPaper tags like `@due(today)` into the file.
 
 Example complete task in a file:
 

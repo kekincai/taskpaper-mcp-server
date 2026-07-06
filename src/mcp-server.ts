@@ -5,7 +5,16 @@ export interface TaskPaperToolHandlers {
   readFrontDocument(): Promise<unknown>;
   readFile(input: { file: string }): Promise<unknown>;
   searchItems(input: { file?: string; query: string }): Promise<unknown>;
-  addTask(input: { file?: string; text: string; project?: string; append?: boolean; createProject?: boolean }): Promise<unknown>;
+  addTask(input: {
+    file?: string;
+    text: string;
+    project?: string;
+    due?: string;
+    start?: string;
+    tags?: Record<string, string | boolean | null>;
+    append?: boolean;
+    createProject?: boolean;
+  }): Promise<unknown>;
   completeTask(input: { file?: string; query: string; date?: string }): Promise<unknown>;
   listProjects(input: { file: string }): Promise<unknown>;
   archiveDone(input: { file: string; archiveProject?: string }): Promise<unknown>;
@@ -75,11 +84,23 @@ export function registerTaskPaperTools(server: ToolRegistrar, tools: TaskPaperTo
         text: z.string().min(1),
         file: z.string().min(1).optional(),
         project: z.string().min(1).optional(),
+        due: z.string().min(1).optional(),
+        start: z.string().min(1).optional(),
+        tags: z.record(z.string(), z.union([z.string(), z.boolean(), z.null()])).optional(),
         append: z.boolean().optional(),
         createProject: z.boolean().optional()
       }
     },
-    async (args: { file?: string; text: string; project?: string; append?: boolean; createProject?: boolean }) =>
+    async (args: {
+      file?: string;
+      text: string;
+      project?: string;
+      due?: string;
+      start?: string;
+      tags?: Record<string, string | boolean | null>;
+      append?: boolean;
+      createProject?: boolean;
+    }) =>
       toJsonText(await tools.addTask(args))
   );
 

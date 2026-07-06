@@ -30,12 +30,43 @@ export interface TaskPaperProject {
   depth: number;
 }
 
-export function normalizeTaskLine(text: string): string {
-  const trimmed = text.trim();
-  if (/^[-+*]\s/.test(trimmed)) {
-    return trimmed;
+export interface TaskPaperTaskMetadata {
+  due?: string;
+  start?: string;
+  tags?: Record<string, string | boolean | null>;
+}
+
+export interface AddTaskInput extends TaskPaperTaskMetadata {
+  file?: string;
+  text: string;
+  project?: string;
+  append?: boolean;
+  createProject?: boolean;
+}
+
+function formatTag(name: string, value: string | boolean | null | undefined): string | undefined {
+  if (!name.trim() || value === false || value === null || value === undefined) {
+    return undefined;
   }
-  return `- ${trimmed}`;
+  if (value === true || value === "") {
+    return `@${name}`;
+  }
+  return `@${name}(${value})`;
+}
+
+function taskMetadataTags(metadata: TaskPaperTaskMetadata = {}): string[] {
+  return [
+    formatTag("due", metadata.due),
+    formatTag("start", metadata.start),
+    ...Object.entries(metadata.tags ?? {}).map(([name, value]) => formatTag(name, value))
+  ].filter((tag): tag is string => Boolean(tag));
+}
+
+export function normalizeTaskLine(text: string, metadata: TaskPaperTaskMetadata = {}): string {
+  const trimmed = text.trim();
+  const task = /^[-+*]\s/.test(trimmed) ? trimmed : `- ${trimmed}`;
+  const tags = taskMetadataTags(metadata).filter((tag) => !task.includes(tag));
+  return tags.length ? `${task} ${tags.join(" ")}` : task;
 }
 
 function depthFromIndent(indent: string): number {
@@ -134,9 +165,9 @@ export function searchTaskPaperText(taskpaperText: string, query: string): TaskP
 
 export function addTaskToTaskPaperText(
   taskpaperText: string,
-  input: { text: string; project?: string; append?: boolean; createProject?: boolean }
+  input: AddTaskInput
 ): string {
-  const task = normalizeTaskLine(input.text);
+  const task = normalizeTaskLine(input.text, input);
   const hasTrailingNewline = taskpaperText.endsWith("\n");
   const lines = taskpaperText.split("\n");
   if (hasTrailingNewline) {
@@ -391,14 +422,17 @@ export function createTaskPaperTools(bridge: TaskPaperBridge, options: TaskPaper
       const items = await bridge.evaluate(searchItemsScript, { query: input.query });
       return { items };
     },
-    async addTask(input: { file?: string; text: string; project?: string; append?: boolean; createProject?: boolean }) {
+    async addTask(input: AddTaskInput) {
       if (input.file) {
         const existing = await fileSystem.readFile(input.file, "utf8");
         const next = addTaskToTaskPaperText(existing, {
           text: input.text,
           project: input.project,
           append: input.append,
-          createProject: input.createProject ?? true
+          createProject: input.createProject ?? true,
+          due: input.due,
+          start: input.start,
+          tags: input.tags
         });
         await fileSystem.writeFile(input.file, next, "utf8");
         return { added: 1, file: input.file };
@@ -411,14 +445,17 @@ export function createTaskPaperTools(bridge: TaskPaperBridge, options: TaskPaper
           text: input.text,
           project: input.project,
           append: input.append,
-          createProject: input.createProject ?? true
+          createProject: input.createProject ?? true,
+          due: input.due,
+          start: input.start,
+          tags: input.tags
         });
         await fileSystem.writeFile(documentInfo.file, next, "utf8");
         return { added: 1, file: documentInfo.file };
       }
 
       return bridge.evaluate(addTaskScript, {
-        text: normalizeTaskLine(input.text),
+        text: normalizeTaskLine(input.text, input),
         project: input.project,
         append: input.append ?? true,
         createProject: input.createProject ?? true

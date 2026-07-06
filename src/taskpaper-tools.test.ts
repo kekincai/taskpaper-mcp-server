@@ -18,6 +18,16 @@ describe("normalizeTaskLine", () => {
   it("preserves existing TaskPaper task syntax", () => {
     expect(normalizeTaskLine("- Buy milk")).toBe("- Buy milk");
   });
+
+  it("appends friendly metadata as TaskPaper tags", () => {
+    expect(
+      normalizeTaskLine("Buy milk", {
+        due: "today",
+        start: "2026-07-08",
+        tags: { home: "", priority: "high" }
+      })
+    ).toBe("- Buy milk @due(today) @start(2026-07-08) @home @priority(high)");
+  });
 });
 
 describe("createTaskPaperTools", () => {
@@ -172,9 +182,9 @@ describe("createTaskPaperTools", () => {
       }
     );
 
-    await tools.addTask({ file: "/tmp/tasks.taskpaper", text: "Buy milk", project: "Inbox" });
+    await tools.addTask({ file: "/tmp/tasks.taskpaper", text: "Buy milk", project: "Inbox", due: "today" });
 
-    expect(writes).toEqual([{ path: "/tmp/tasks.taskpaper", text: "Inbox:\n\t- Buy milk\n" }]);
+    expect(writes).toEqual([{ path: "/tmp/tasks.taskpaper", text: "Inbox:\n\t- Buy milk @due(today)\n" }]);
   });
 
   it("marks the first matching item done with an ISO date", async () => {
