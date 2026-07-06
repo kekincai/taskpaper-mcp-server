@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises";
+
 export interface TaskPaperBridge {
   evaluate(taskpaperFunction: string, options?: unknown): Promise<unknown>;
   runJxa(script: string): Promise<unknown>;
@@ -5,12 +7,63 @@ export interface TaskPaperBridge {
 
 declare const ItemSerializer: any;
 
+export interface TaskPaperToolsOptions {
+  fileSystem?: {
+    readFile(path: string, encoding: "utf8"): Promise<string>;
+    writeFile(path: string, text: string, encoding: "utf8"): Promise<void>;
+  };
+}
+
 export function normalizeTaskLine(text: string): string {
   const trimmed = text.trim();
   if (/^[-+*]\s/.test(trimmed)) {
     return trimmed;
   }
   return `- ${trimmed}`;
+}
+
+export function addTaskToTaskPaperText(
+  taskpaperText: string,
+  input: { text: string; project?: string; append?: boolean; createProject?: boolean }
+): string {
+  const task = normalizeTaskLine(input.text);
+  const hasTrailingNewline = taskpaperText.endsWith("\n");
+  const lines = taskpaperText.split("\n");
+  if (hasTrailingNewline) {
+    lines.pop();
+  }
+
+  if (!input.project) {
+    lines.push(task);
+    return `${lines.join("\n")}\n`;
+  }
+
+  const projectLineIndex = lines.findIndex((line) => line.trim() === `${input.project}:`);
+  if (projectLineIndex === -1) {
+    if (!input.createProject) {
+      throw new Error(`Project not found: ${input.project}`);
+    }
+    lines.push(`${input.project}:`, `\t${task}`);
+    return `${lines.join("\n")}\n`;
+  }
+
+  const projectIndent = lines[projectLineIndex]?.match(/^\s*/)?.[0] ?? "";
+  const childIndent = `${projectIndent}\t`;
+  let insertIndex = projectLineIndex + 1;
+
+  if (input.append ?? true) {
+    insertIndex = lines.length;
+    for (let index = projectLineIndex + 1; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      if (line.trim() && !line.startsWith(childIndent)) {
+        insertIndex = index;
+        break;
+      }
+    }
+  }
+
+  lines.splice(insertIndex, 0, `${childIndent}${task}`);
+  return `${lines.join("\n")}\n`;
 }
 
 const searchItemsScript = String(function TaskPaperContextScript(
@@ -100,12 +153,38 @@ try {
 }
 `;
 
-export function createTaskPaperTools(bridge: TaskPaperBridge) {
+const frontDocumentInfoScript = `
+const taskpaper = Application("TaskPaper");
+const document = taskpaper.documents[0];
+let file = null;
+try {
+  const documentFile = document.file();
+  file = documentFile === null ? null : String(documentFile);
+} catch (error) {
+  file = null;
+}
+JSON.stringify({
+  name: document.name(),
+  file,
+  modified: document.modified()
+});
+`;
+
+export function createTaskPaperTools(bridge: TaskPaperBridge, options: TaskPaperToolsOptions = {}) {
+  const fileSystem = options.fileSystem ?? { readFile, writeFile };
+
   return {
     async status() {
       return bridge.runJxa(statusScript);
     },
     async readFrontDocument() {
+      const documentInfo = (await bridge.runJxa(frontDocumentInfoScript)) as { file?: string | null };
+      if (documentInfo.file) {
+        return {
+          text: await fileSystem.readFile(documentInfo.file, "utf8"),
+          file: documentInfo.file
+        };
+      }
       const text = await bridge.evaluate(readFrontDocumentScript);
       return { text };
     },
@@ -113,7 +192,32 @@ export function createTaskPaperTools(bridge: TaskPaperBridge) {
       const items = await bridge.evaluate(searchItemsScript, { query: input.query });
       return { items };
     },
-    async addTask(input: { text: string; project?: string; append?: boolean; createProject?: boolean }) {
+    async addTask(input: { file?: string; text: string; project?: string; append?: boolean; createProject?: boolean }) {
+      if (input.file) {
+        const existing = await fileSystem.readFile(input.file, "utf8");
+        const next = addTaskToTaskPaperText(existing, {
+          text: input.text,
+          project: input.project,
+          append: input.append,
+          createProject: input.createProject ?? true
+        });
+        await fileSystem.writeFile(input.file, next, "utf8");
+        return { added: 1, file: input.file };
+      }
+
+      const documentInfo = (await bridge.runJxa(frontDocumentInfoScript)) as { file?: string | null };
+      if (documentInfo.file) {
+        const existing = await fileSystem.readFile(documentInfo.file, "utf8");
+        const next = addTaskToTaskPaperText(existing, {
+          text: input.text,
+          project: input.project,
+          append: input.append,
+          createProject: input.createProject ?? true
+        });
+        await fileSystem.writeFile(documentInfo.file, next, "utf8");
+        return { added: 1, file: documentInfo.file };
+      }
+
       return bridge.evaluate(addTaskScript, {
         text: normalizeTaskLine(input.text),
         project: input.project,

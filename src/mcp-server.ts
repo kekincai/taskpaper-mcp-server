@@ -4,7 +4,7 @@ export interface TaskPaperToolHandlers {
   status(): Promise<unknown>;
   readFrontDocument(): Promise<unknown>;
   searchItems(input: { query: string }): Promise<unknown>;
-  addTask(input: { text: string; project?: string; append?: boolean; createProject?: boolean }): Promise<unknown>;
+  addTask(input: { file?: string; text: string; project?: string; append?: boolean; createProject?: boolean }): Promise<unknown>;
   completeTask(input: { query: string; date?: string }): Promise<unknown>;
   setFilter(input: { query: string }): Promise<unknown>;
 }
@@ -57,12 +57,13 @@ export function registerTaskPaperTools(server: ToolRegistrar, tools: TaskPaperTo
       description: "Add a task to the root or a named project in the front TaskPaper document.",
       inputSchema: {
         text: z.string().min(1),
+        file: z.string().min(1).optional(),
         project: z.string().min(1).optional(),
         append: z.boolean().optional(),
         createProject: z.boolean().optional()
       }
     },
-    async (args: { text: string; project?: string; append?: boolean; createProject?: boolean }) =>
+    async (args: { file?: string; text: string; project?: string; append?: boolean; createProject?: boolean }) =>
       toJsonText(await tools.addTask(args))
   );
 

@@ -16,7 +16,7 @@ This server talks to TaskPaper through JavaScript for Automation (`osascript -l 
 - `taskpaper_status` - check install/running status and open document count
 - `taskpaper_read_front_document` - read the front document as TaskPaper text
 - `taskpaper_search_items` - search the front document with TaskPaper item path/search syntax
-- `taskpaper_add_task` - add a task to root or a named project
+- `taskpaper_add_task` - add a task to root or a named project. Pass `file` to edit a `.taskpaper` file directly; otherwise it tries the front TaskPaper document.
 - `taskpaper_complete_task` - mark the first matching item as `@done(yyyy-mm-dd)`
 - `taskpaper_set_filter` - set the front document's TaskPaper filter
 
@@ -45,5 +45,15 @@ Example MCP configuration:
       "args": ["/absolute/path/to/taskpaper-mcp-server/dist/server.js"]
     }
   }
+}
+```
+
+Example direct file write:
+
+```json
+{
+  "file": "/Users/you/tasks.taskpaper",
+  "project": "Inbox",
+  "text": "Buy milk @due(today)"
 }
 ```
